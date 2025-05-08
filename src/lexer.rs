@@ -66,6 +66,7 @@ pub(crate) enum Token {
     LSquare,
     RSquare,
     Semicolon,
+    Colon,
     Comma,
     Period,
 }
@@ -183,19 +184,21 @@ pub(crate) fn lexer<'src>()
             .repeated()
             // .lazy()
             .to_slice()
+            // TODO actually lex this
             .map(|s: &str| s.to_owned())
         });
 
         simple_expr
             .map(TemplateStringFragment::Placeholder)
             .delimited_by(just("${"), just("}"))
-            // .or(string_escapes()
-            //     .or(just(r#"\`"#).to('`'))
-            //     .or(any().and_is(just('`').not()))
-            //     .repeated()
-            //     .collect::<String>()
-            //     .boxed()
-            //     .map(TemplateStringFragment::String))
+            .or(string_escapes()
+                .or(just(r#"\`"#).to('`'))
+                .or(any().and_is(just('`').not()))
+                .repeated()
+                .at_least(1)
+                .collect::<String>()
+                .boxed()
+                .map(TemplateStringFragment::String))
             .map_with(|tsf, ex| (tsf, ex.span()))
             .repeated()
             .collect()
@@ -248,6 +251,7 @@ pub(crate) fn lexer<'src>()
         just("[").to(Token::LSquare),
         just("]").to(Token::RSquare),
         just(";").to(Token::Semicolon),
+        just(":").to(Token::Colon),
         just(",").to(Token::Comma),
         just(".").to(Token::Period),
     ));
