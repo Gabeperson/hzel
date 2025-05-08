@@ -21,6 +21,10 @@ pub(crate) enum Token {
     Const,
     Return,
     Typeof,
+    InstanceOf,
+    Class,
+    Try,
+    Catch,
 
     Identifier(String),
     HexLiteral(i64),
@@ -89,6 +93,10 @@ pub(crate) fn lexer<'src>()
             "const" => Token::Const,
             "return" => Token::Return,
             "typeof" => Token::Typeof,
+            "instanceof" => Token::InstanceOf,
+            "class" => Token::Class,
+            "try" => Token::Try,
+            "catch" => Token::Catch,
             _ => Token::Identifier(ident.to_owned()),
         });
 
