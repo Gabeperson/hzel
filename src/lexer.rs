@@ -1,4 +1,3 @@
-use chumsky::input::MapExtra;
 use chumsky::prelude::*;
 use chumsky::text::ident;
 
@@ -25,7 +24,8 @@ pub(crate) enum Token {
     Class,
     Try,
     Catch,
-
+    New,
+    // SelfKeyword,
     Identifier(String),
     HexLiteral(i64),
     DecLiteral(i64),
@@ -57,12 +57,16 @@ pub(crate) enum Token {
     Tilde,
     Shl,
     Shr,
+    ShrUnsigned,
     AmpersandEquals,
     PipeEquals,
     CaretEquals,
     Exclamation,
     DoubleAmpersand,
     DoublePipe,
+    ShlEquals,
+    ShrEquals,
+    ShrUnsignedEquals,
     LParen,
     RParen,
     LCurly,
@@ -73,6 +77,13 @@ pub(crate) enum Token {
     Colon,
     Comma,
     Period,
+    Spread,
+}
+
+impl PartialEq<Token> for &Token {
+    fn eq(&self, other: &Token) -> bool {
+        (*self).eq(other)
+    }
 }
 
 pub(crate) type Span = SimpleSpan;
@@ -97,11 +108,13 @@ pub(crate) fn lexer<'src>()
             "class" => Token::Class,
             "try" => Token::Try,
             "catch" => Token::Catch,
+            "new" => Token::New,
+            // "self" => Token::SelfKeyword,
             _ => Token::Identifier(ident.to_owned()),
         });
 
         let float = text::int(10)
-            .then(just(","))
+            .then(just("."))
             .then(text::int(10).or_not())
             .to_slice()
             .validate(|n: &str, ex, emitter| match n.parse::<f64>() {
@@ -217,6 +230,10 @@ pub(crate) fn lexer<'src>()
         });
         let operator = choice((
             choice((
+                just("<<=").to(Token::ShlEquals),
+                just(">>=").to(Token::ShrEquals),
+                just(">>>=").to(Token::ShrUnsignedEquals),
+                just(">>>").to(Token::ShrUnsigned),
                 just("==").to(Token::Eqeq),
                 just("!=").to(Token::Neq),
                 just(">=").to(Token::GTE),
@@ -235,6 +252,7 @@ pub(crate) fn lexer<'src>()
                 just("||").to(Token::DoublePipe),
             )),
             choice((
+                just("...").to(Token::Spread),
                 just("|=").to(Token::PipeEquals),
                 just("^=").to(Token::CaretEquals),
                 just("%").to(Token::Percent),

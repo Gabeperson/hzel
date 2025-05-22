@@ -1,6 +1,6 @@
-use hzel::lex;
+use hzel::parse;
 
 fn main() {
     let f = std::fs::read_to_string("code.txt").unwrap();
-    lex(&f);
+    parse(&f);
 }

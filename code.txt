@@ -1,1 +1,28 @@
-`${`${5}`}55`
+
+function something(x, y) {
+	ljasldf;
+}
+
+-> fn
+
+ -> Garbage collection
+ - LUA speed, GC, interop, people knowing it, etc.
+
+
+
+class SomeClass {
+	constructor() {
+		
+	}
+	fn constructor(self) -> 
+	fn something(x: i64, y: 64) -> i64 {
+		return x + y;
+	}
+}
+
+-> unique
+
+```
+let some_var = some_native_function(5, 10); // What type should this be
+	
+```
