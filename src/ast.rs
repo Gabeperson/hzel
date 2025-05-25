@@ -1,4 +1,8 @@
 use crate::lexer::Spanned;
+extern crate alloc;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Expr {

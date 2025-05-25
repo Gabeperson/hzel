@@ -1,4 +1,8 @@
-use std::num::{ParseFloatError, ParseIntError};
+use core::num::{ParseFloatError, ParseIntError};
+extern crate alloc;
+use alloc::borrow::ToOwned as _;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Span {
@@ -177,7 +181,7 @@ impl Lexer<'_> {
             if self.slice().starts_with("//") {
                 let line_end = self
                     .slice()
-                    .find("\n")
+                    .find('\n')
                     .unwrap_or(self.input.len() - self.len())
                     + 1;
                 self.cursor += line_end;
@@ -278,7 +282,7 @@ impl Lexer<'_> {
         ];
         let slice = self.slice();
         let start = self.cursor;
-        for (prefix, token) in ops.iter() {
+        for (prefix, token) in ops {
             if slice.starts_with(prefix) {
                 self.bumpn(prefix.len());
                 let end = self.cursor;
@@ -333,7 +337,7 @@ impl Lexer<'_> {
         if let Some(hex) = self.parse_hex() {
             return Some(hex);
         }
-        self.parse_float_or_dec()
+        Some(self.parse_float_or_dec())
     }
     fn parse_hex(&mut self) -> Option<Spanned<Token>> {
         let start = self.cursor;
@@ -370,7 +374,7 @@ impl Lexer<'_> {
             Span::new(start, end),
         ))
     }
-    fn parse_float_or_dec(&mut self) -> Option<Spanned<Token>> {
+    fn parse_float_or_dec(&mut self) -> Spanned<Token> {
         let start = self.cursor;
         let len = self
             .slice()
@@ -389,10 +393,10 @@ impl Lexer<'_> {
                         e,
                         Span::new(start, int_end),
                     ));
-                    return Some(Spanned(Token::Err, Span::new(0, 0)));
+                    return Spanned(Token::Err, Span::new(0, 0));
                 }
             };
-            return Some(Spanned(Token::DecLiteral(num), Span::new(start, int_end)));
+            return Spanned(Token::DecLiteral(num), Span::new(start, int_end));
         }
         // Possibilities: 10. or 10.0 or 10.method()
         self.bumpn(1);
@@ -406,10 +410,10 @@ impl Lexer<'_> {
                         e,
                         Span::new(start, int_end),
                     ));
-                    return Some(Spanned(Token::Err, Span::new(0, 0)));
+                    return Spanned(Token::Err, Span::new(0, 0));
                 }
             };
-            Some(Spanned(Token::DecLiteral(num), Span::new(start, int_end)))
+            Spanned(Token::DecLiteral(num), Span::new(start, int_end))
         } else if next.is_ascii_digit() {
             // 10.0
             let len2 = self
@@ -424,10 +428,10 @@ impl Lexer<'_> {
                 Err(e) => {
                     self.errors
                         .push(LexingError::FloatParseError(e, Span::new(start, int_end)));
-                    return Some(Spanned(Token::Err, Span::new(0, 0)));
+                    return Spanned(Token::Err, Span::new(0, 0));
                 }
             };
-            return Some(Spanned(Token::FloatLiteral(num), Span::new(start, int_end)));
+            return Spanned(Token::FloatLiteral(num), Span::new(start, int_end));
         } else {
             // 10.
             let num = match self.input[start..start + len + 1].parse::<f64>() {
@@ -435,10 +439,10 @@ impl Lexer<'_> {
                 Err(e) => {
                     self.errors
                         .push(LexingError::FloatParseError(e, Span::new(start, int_end)));
-                    return Some(Spanned(Token::Err, Span::new(0, 0)));
+                    return Spanned(Token::Err, Span::new(0, 0));
                 }
             };
-            return Some(Spanned(Token::FloatLiteral(num), Span::new(start, int_end)));
+            return Spanned(Token::FloatLiteral(num), Span::new(start, int_end));
         }
     }
     // TODO UNPUBLIC
@@ -522,11 +526,11 @@ impl Lexer<'_> {
                     in_err: false,
                     err_start: 0,
                     // Doing this saves potentially an allocation
-                    errors: std::mem::take(&mut self.errors),
+                    errors: core::mem::take(&mut self.errors),
                 };
                 let tokens = lexer.lex();
                 // Put it back
-                std::mem::swap(&mut lexer.errors, &mut self.errors);
+                core::mem::swap(&mut lexer.errors, &mut self.errors);
                 vec.push(Spanned(
                     TemplateStringFragment::Placeholder(tokens),
                     Span::new(start_expr, end_expr),

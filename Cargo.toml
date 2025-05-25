@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 chumsky = "0.10.1"
+hashbrown = "0.15.3"
 slotmap = "1.0.7"
-smartstring = "1.0.1"
+smol_str = "0.3.2"
 tinyvec = { version = "1.9.0", features = ["alloc"] }

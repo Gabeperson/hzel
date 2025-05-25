@@ -1,6 +1,9 @@
-use std::borrow::Cow;
-use std::panic::Location;
-use std::time::Instant;
+extern crate alloc;
+use alloc::borrow::Cow;
+use alloc::borrow::ToOwned;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use super::ast::*;
 use super::lexer;
@@ -1078,7 +1081,7 @@ impl<'src> Parser<'src> {
 // Pratt parsing
 impl Parser<'_> {
     fn parse_expr_bp(&mut self, bp: u8) -> Option<Spanned<Expr>> {
-        let mut lhs = match prefix_bp(dbg!(self.current())) {
+        let mut lhs = match prefix_bp(self.current()) {
             Some(((), r_bp)) => {
                 let opspan = self.span();
                 let token = self.current().clone();

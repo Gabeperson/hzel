@@ -18,10 +18,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "autocfg"
-version = "1.4.0"
+name = "borsh"
+version = "1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ace50bade8e6234aa140d9a2f552bbee1db4d353f69b8217bc503490fc1a9f26"
+checksum = "ad8646f98db542e39fc66e68a20b2144f6a732636df7c2354e74645faaa433ce"
+dependencies = [
+ "cfg_aliases",
+]
 
 [[package]]
 name = "cc"
@@ -37,6 +40,12 @@ name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
+
+[[package]]
+name = "cfg_aliases"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chumsky"
@@ -80,8 +89,9 @@ name = "hzel"
 version = "0.1.0"
 dependencies = [
  "chumsky",
+ "hashbrown",
  "slotmap",
- "smartstring",
+ "smol_str",
  "tinyvec",
 ]
 
@@ -177,14 +187,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "smartstring"
-version = "1.0.1"
+name = "smol_str"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fb72c633efbaa2dd666986505016c32c3044395ceaf881518399d2f4127ee29"
+checksum = "9676b89cd56310a87b93dec47b11af744f34d5fc9f367b829474eec0a891350d"
 dependencies = [
- "autocfg",
- "static_assertions",
- "version_check",
+ "borsh",
+ "serde",
 ]
 
 [[package]]
@@ -199,12 +208,6 @@ dependencies = [
  "psm",
  "windows-sys",
 ]
-
-[[package]]
-name = "static_assertions"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "syn"
