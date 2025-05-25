@@ -1,20 +1,20 @@
-use crate::lexer::{Span, Spanned};
+use crate::lexer::Spanned;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum Expr {
     Literal(Spanned<Literal>),
     Identifier(Spanned<Ident>),
     UnaryPrefix {
-        op: (PrefixOp, Span),
+        op: Spanned<PrefixOp>,
         expr: Box<Spanned<Expr>>,
     },
     UnaryPostfix {
         expr: Box<Spanned<Expr>>,
-        op: (PostfixOp, Span),
+        op: Spanned<PostfixOp>,
     },
     Infix {
         left: Box<Spanned<Expr>>,
-        op: (InfixOp, Span),
+        op: Spanned<InfixOp>,
         right: Box<Spanned<Expr>>,
     },
     Call {
@@ -25,25 +25,43 @@ pub(crate) enum Expr {
         target: Box<Spanned<Expr>>,
         index: Box<Spanned<Expr>>,
     },
-    ObjectLiteral(Vec<(Spanned<Ident>, Spanned<Expr>)>), // Object key-value pairs
-    ArrayLiteral(Vec<Spanned<Expr>>),                    // Array of expressions
+    ObjectLiteral(Vec<(Spanned<Ident>, Spanned<Expr>)>),
+    ArrayLiteral(Vec<Spanned<Expr>>),
     Ternary {
         condition: Box<Spanned<Expr>>,
         then_expr: Box<Spanned<Expr>>,
         else_expr: Box<Spanned<Expr>>,
     },
     NewClass {
-        class: Box<Spanned<Expr>>,
+        class: Class,
         arguments: Vec<Spanned<Expr>>,
     },
     Parenthesized(Box<Spanned<Expr>>),
+    AsCast {
+        left: Box<Spanned<Expr>>,
+        to: Type,
+    },
     Err,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Type {
+    Vec(Box<Spanned<Type>>),
+    HashMap(Box<Spanned<Type>>, Box<Spanned<Type>>),
+    I64,
+    F64,
+    String,
+    Class(Class),
+    FnPtr(Spanned<Vec<Spanned<Type>>>, Option<Box<Spanned<Type>>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Class(pub(crate) Ident);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Ident(pub(crate) String);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum Literal {
     Null,
     Integer(i64),
@@ -52,7 +70,7 @@ pub(crate) enum Literal {
     Template(Vec<Spanned<TemplateStringFragmentExpr>>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum TemplateStringFragmentExpr {
     Literal(String),
     Expr(Expr),
@@ -60,9 +78,7 @@ pub(crate) enum TemplateStringFragmentExpr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Pattern {
-    Object(Vec<(Spanned<Expr>, Option<Spanned<Pattern>>)>),
-    // TODO: change to ident only
-    Array(Vec<Option<Spanned<Pattern>>>, Option<Spanned<Box<Pattern>>>),
+    Tuple(Vec<Option<Spanned<Pattern>>>),
     Ident(Spanned<Ident>),
 }
 
@@ -94,9 +110,9 @@ pub(crate) enum InfixOp {
     NotEq,
     Eqeq,
     Assign,
-    RArrow,
+    GT,
     GTE,
-    LArrow,
+    LT,
     LTE,
     And,
     Or,
@@ -120,15 +136,13 @@ pub(crate) enum InfixOp {
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum Stmt {
     ExprStmt(Spanned<Expr>),
     LetDecl {
+        mutable: bool,
         lhs: Spanned<Pattern>,
-        rhs: Option<Spanned<Expr>>,
-    },
-    ConstDecl {
-        lhs: Spanned<Pattern>,
+        typ: Option<Spanned<Type>>,
         rhs: Option<Spanned<Expr>>,
     },
     If {
@@ -150,7 +164,7 @@ pub(crate) enum Stmt {
     Block(Spanned<Block>),
     Function {
         name: Spanned<Ident>,
-        params: Spanned<Vec<Spanned<Pattern>>>,
+        params: Spanned<Vec<(Spanned<Pattern>, Spanned<Type>)>>,
         body: Spanned<Block>,
     },
     TryCatch {
@@ -165,19 +179,19 @@ pub(crate) enum Stmt {
     Empty,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct Block {
     pub(crate) inner: Vec<Spanned<Stmt>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct FunctionDecl {
     pub(crate) name: Option<Spanned<Ident>>,
     pub(crate) params: Vec<Spanned<Ident>>,
     pub(crate) body: Spanned<Block>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct File {
     pub(crate) stmts: Vec<Spanned<Stmt>>,
 }

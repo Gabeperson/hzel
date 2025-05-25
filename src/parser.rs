@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::panic::Location;
+use std::time::Instant;
 
 use super::ast::*;
 use super::lexer;
@@ -37,6 +38,7 @@ pub(crate) enum ParsingErrorType {
     TokenAfterSpread,
     InvalidTemplateStringPlaceholder,
     TemplateStringPlaceholderRemainingTokens,
+    EmptyTemplateStringPlaceholder,
     MismatchedDelimiter {
         expected: Token,
         found: Token,
@@ -70,23 +72,18 @@ pub(crate) enum ExpectedToken {
     TokenType(Cow<'static, str>),
 }
 
-pub(crate) enum VarDeclType {
-    Let,
-    Const,
-}
-
 use ExpectedToken as ET;
 use ParsingErrorType as PET;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Parser<'src> {
-    tokens: &'src [(Token, Span)],
+    tokens: &'src [Spanned<Token>],
     cursor: usize,
     errors: Vec<ParsingError>,
 }
 
 impl<'src> Parser<'src> {
-    pub(crate) fn new(tokens: &'src [(Token, Span)]) -> Self {
+    pub(crate) fn new(tokens: &'src [Spanned<Token>]) -> Self {
         Parser {
             tokens,
             cursor: 0,
@@ -96,12 +93,14 @@ impl<'src> Parser<'src> {
     pub(crate) fn into_errs(self) -> Vec<ParsingError> {
         self.errors
     }
+    #[track_caller]
     fn current(&self) -> &Token {
         &(self.tokens[self.cursor].0)
     }
     fn next(&self) -> Option<&Token> {
         self.tokens.get(self.cursor + 1).map(|ts| &ts.0)
     }
+    #[track_caller]
     fn span(&self) -> Span {
         self.tokens[self.cursor].1
     }
@@ -117,9 +116,6 @@ impl<'src> Parser<'src> {
     fn span_end(&self) -> usize {
         self.span().end
     }
-    fn new_span(&self, start: usize, end: usize) -> Span {
-        Span::from(start..end)
-    }
     fn bump(&mut self) {
         self.cursor += 1;
     }
@@ -127,12 +123,36 @@ impl<'src> Parser<'src> {
         self.cursor += 1;
         if self.is_empty() {
             self.error(ParsingError::new(
-                self.new_span(self.prev_span_end(), self.prev_span_end() + 1),
+                Span::new(self.prev_span_end(), self.prev_span_end() + 1),
                 ParsingErrorType::EOF,
             ));
             return None;
         }
         Some(())
+    }
+    fn expect_token(&mut self, token: Token) -> Option<()> {
+        if self.current() == token {
+            self.bumpe()?;
+            Some(())
+        } else {
+            self.error(ParsingError::new(
+                self.span(),
+                PET::wrong_token(ET::Token(token), self.current().clone()),
+            ));
+            None
+        }
+    }
+    fn expect_token_withtype(&mut self, token: Token, typ: Cow<'static, str>) -> Option<()> {
+        if self.current() == token {
+            self.bumpe()?;
+            Some(())
+        } else {
+            self.error(ParsingError::new(
+                self.span(),
+                PET::wrong_token(ET::TokenType(typ), self.current().clone()),
+            ));
+            None
+        }
     }
     fn bumpn(&mut self, n: usize) {
         self.cursor += n;
@@ -174,7 +194,8 @@ impl<'src> Parser<'src> {
         while !self.is_empty() && !self.is_stmt_start() {
             self.bump();
         }
-        if !self.is_empty() && self.current() == Token::RCurly || self.current() == Token::Semicolon
+        if !self.is_empty()
+            && (self.current() == Token::RCurly || self.current() == Token::Semicolon)
         {
             self.bump();
         }
@@ -183,7 +204,6 @@ impl<'src> Parser<'src> {
         matches!(
             self.current(),
             Token::Let
-                | Token::Const
                 | Token::If
                 | Token::While
                 | Token::For
@@ -210,10 +230,68 @@ impl<'src> Parser<'src> {
         File { stmts }
     }
 
+    fn parse_type(&mut self) -> Option<Spanned<Type>> {
+        let start = self.span_start();
+        match self.current() {
+            Token::Identifier(ident) => {
+                let typ = match &**ident {
+                    "i64" => Type::I64,
+                    "f64" => Type::F64,
+                    "string" => Type::String,
+                    "HashMap" => {
+                        self.expect_token(Token::LArrow)?;
+                        let key = self.parse_type()?;
+                        self.expect_token(Token::Comma)?;
+                        let val = self.parse_type()?;
+                        self.expect_token(Token::RArrow)?;
+                        Type::HashMap(Box::new(key), Box::new(val))
+                    }
+                    "Vec" => {
+                        self.expect_token(Token::LArrow)?;
+                        let item = self.parse_type()?;
+                        self.expect_token(Token::RArrow)?;
+                        Type::Vec(Box::new(item))
+                    }
+                    other => Type::Class(Class(Ident(other.to_owned()))),
+                };
+                self.bumpe()?;
+                Some(Spanned(typ, Span::new(start, self.prev_span_end())))
+            }
+            Token::Function => {
+                self.bumpe()?;
+                let paramtypes = self.parse_fn_ptr_params()?;
+                let ret = if self.current() == Token::Arrow {
+                    self.bumpe()?;
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+                Some(Spanned(
+                    Type::FnPtr(paramtypes, ret.map(Box::new)),
+                    Span::new(start, self.prev_span_end()),
+                ))
+            }
+            _ => {
+                self.error(ParsingError::new(
+                    self.span(),
+                    PET::wrong_token(ET::TokenType(Cow::Borrowed("type")), self.current().clone()),
+                ));
+                None
+            }
+        }
+    }
+
     fn parse_stmt(&mut self) -> Option<Spanned<Stmt>> {
         let stmt = match self.current() {
-            Token::Let => self.parse_vardecl(VarDeclType::Let),
-            Token::Const => self.parse_vardecl(VarDeclType::Const),
+            Token::Let => {
+                let decl = self.parse_letdecl();
+                if decl.is_none() {
+                    self.recover_stmt();
+                    None
+                } else {
+                    decl
+                }
+            }
             Token::If => return self.parse_if(),
             Token::While => return self.parse_while(),
             Token::For => return self.parse_for(),
@@ -221,7 +299,7 @@ impl<'src> Parser<'src> {
             Token::LCurly => {
                 return self
                     .parse_block()
-                    .map(|(block, span)| (Stmt::Block((block, span)), span));
+                    .map(|Spanned(block, span)| Spanned(Stmt::Block(Spanned(block, span)), span));
             }
             Token::Function => return self.parse_function(),
             Token::Try => return self.parse_trycatch(),
@@ -236,14 +314,14 @@ impl<'src> Parser<'src> {
             }
             Token::Semicolon => {
                 let span = self.span();
-                Some((Stmt::Empty, span))
+                Some(Spanned(Stmt::Empty, span))
             }
             _ => {
                 let expr = self
                     .parse_expr()
-                    .map(|(expr, span)| (Stmt::ExprStmt((expr, span)), span));
+                    .map(|Spanned(expr, span)| Spanned(Stmt::ExprStmt(Spanned(expr, span)), span));
                 if expr.is_none() {
-                    self.recover_stmt();
+                    self.recover_until_stmt_start();
                     return None;
                 }
                 expr
@@ -312,16 +390,17 @@ impl<'src> Parser<'src> {
 
         let catchblock = self.parse_block()?;
         let end = self.prev_span_end();
-        Some((
+        Some(Spanned(
             Stmt::TryCatch {
                 try_block: tryblock,
                 catch_param: errvar,
                 catch_block: Box::new(catchblock),
             },
-            self.new_span(start, end),
+            Span::new(start, end),
         ))
     }
 
+    // TODO parse return type
     fn parse_function(&mut self) -> Option<Spanned<Stmt>> {
         let start = self.span_start();
         if self.current() != Token::Function {
@@ -330,7 +409,7 @@ impl<'src> Parser<'src> {
             self.bumpe()?;
         };
         let ident = match self.current() {
-            Token::Identifier(ident) => (Ident(ident.clone()), self.span()),
+            Token::Identifier(ident) => Spanned(Ident(ident.clone()), self.span()),
             other => {
                 self.error(ParsingError::new(
                     self.span(),
@@ -349,26 +428,29 @@ impl<'src> Parser<'src> {
         };
         let body = self.parse_block()?;
         let end = self.prev_span_end();
-        Some((
+        Some(Spanned(
             Stmt::Function {
                 name: ident,
                 params,
                 body,
             },
-            self.new_span(start, end),
+            Span::new(start, end),
         ))
     }
-    fn parse_params(&mut self) -> Option<Spanned<Vec<Spanned<Pattern>>>> {
+
+    #[allow(clippy::type_complexity)]
+    fn parse_params(&mut self) -> Option<Spanned<Vec<(Spanned<Pattern>, Spanned<Type>)>>> {
         if self.current() != Token::LParen {
             panic!("Internal compiler error. Expected (, found something else");
         } else {
             self.bumpe()?;
         };
-        // Check self, then parse
         let mut params = Vec::new();
         while !self.is_empty() && self.current() != Token::RParen {
             if let Some(param) = self.parse_pat() {
-                params.push(param);
+                self.expect_token_withtype(Token::Colon, Cow::Borrowed("parameter type"))?;
+                let typ = self.parse_type()?;
+                params.push((param, typ));
             }
             if self.current() == Token::Comma {
                 self.bumpe()?;
@@ -397,7 +479,45 @@ impl<'src> Parser<'src> {
         }
         self.bumpe()?;
         let end = self.prev_span_end();
-        Some((params, self.new_span(self.span_start(), end)))
+        Some(Spanned(params, Span::new(self.span_start(), end)))
+    }
+
+    fn parse_fn_ptr_params(&mut self) -> Option<Spanned<Vec<Spanned<Type>>>> {
+        if self.current() != Token::LParen {
+            panic!("Internal compiler error. Expected (, found something else");
+        } else {
+            self.bumpe()?;
+        };
+        let mut params = Vec::new();
+        while !self.is_empty() && self.current() != Token::RParen {
+            if let Some(param) = self.parse_type() {
+                params.push(param);
+            }
+            if self.current() == Token::Comma {
+                self.bumpe()?;
+            } else if !matches!(self.current(), Token::RParen) {
+                // if there is no comma and we're not at RParen, then missing comma.
+                // else it might be a trailing comma (a, b, c,)
+                self.error(ParsingError::new(
+                    self.span(),
+                    PET::wrong_token(ET::TokenType(Cow::Borrowed("type")), self.current().clone()),
+                ))
+            }
+        }
+        if self.is_empty() {
+            self.error(ParsingError::new(self.prev_span(), PET::EOF));
+            return None;
+        }
+        if self.current() != Token::RParen {
+            self.error(ParsingError::new(
+                self.span(),
+                PET::wrong_token(ET::Token(Token::RParen), self.current().clone()),
+            ));
+            return None;
+        }
+        self.bumpe()?;
+        let end = self.prev_span_end();
+        Some(Spanned(params, Span::new(self.span_start(), end)))
     }
 
     fn parse_return(&mut self) -> Option<Spanned<Stmt>> {
@@ -409,7 +529,7 @@ impl<'src> Parser<'src> {
         };
         if self.current() == Token::Semicolon {
             let span = self.prev_span();
-            return Some((Stmt::Return(None), span));
+            return Some(Spanned(Stmt::Return(None), span));
         }
         let expr = self.parse_expr();
         let expr = if let Some(expr) = expr {
@@ -419,8 +539,8 @@ impl<'src> Parser<'src> {
             return None;
         };
         let end = self.prev_span_end();
-        let span = self.new_span(start, end);
-        Some((Stmt::Return(Some(expr)), span))
+        let span = Span::new(start, end);
+        Some(Spanned(Stmt::Return(Some(expr)), span))
     }
 
     fn parse_for(&mut self) -> Option<Spanned<Stmt>> {
@@ -447,21 +567,12 @@ impl<'src> Parser<'src> {
                 return None;
             }
             Token::Let => {
-                let vardecl = self.parse_vardecl(VarDeclType::Let);
+                let vardecl = self.parse_letdecl();
                 if vardecl.is_none() {
                     self.recover_until_stmt_start();
                     return None;
                 }
-
                 self.skip_maybe_semicolon()?;
-                vardecl
-            }
-            Token::Const => {
-                let vardecl = self.parse_vardecl(VarDeclType::Const);
-                if vardecl.is_none() {
-                    self.recover_until_stmt_start();
-                    return None;
-                }
                 vardecl
             }
             _ => {
@@ -470,7 +581,7 @@ impl<'src> Parser<'src> {
                     self.recover_until_stmt_start();
                     return None;
                 }
-                expr.map(|(expr, span)| (Stmt::ExprStmt((expr, span)), span))
+                expr.map(|Spanned(expr, span)| Spanned(Stmt::ExprStmt(Spanned(expr, span)), span))
             }
         };
         self.skip_maybe_semicolon()?;
@@ -520,24 +631,21 @@ impl<'src> Parser<'src> {
             return None;
         }
         let end = self.prev_span_end();
-        Some((
+        Some(Spanned(
             Stmt::For {
                 init: first_stmt.map(Box::new),
                 condition,
                 update,
                 body: Box::new(body),
             },
-            self.new_span(start, end),
+            Span::new(start, end),
         ))
     }
 
     fn is_invalid_stmt_body_type(&self, stmt: &Stmt) -> bool {
         matches!(
             stmt,
-            Stmt::ClassDecl { .. }
-                | Stmt::Function { .. }
-                | Stmt::LetDecl { .. }
-                | Stmt::ConstDecl { .. }
+            Stmt::ClassDecl { .. } | Stmt::Function { .. } | Stmt::LetDecl { .. }
         )
     }
     fn parse_if(&mut self) -> Option<Spanned<Stmt>> {
@@ -579,13 +687,13 @@ impl<'src> Parser<'src> {
             else_branch = Some(Box::new(stmt));
             end = self.prev_span_end();
         }
-        Some((
+        Some(Spanned(
             Stmt::If {
                 condition,
                 then_branch: Box::new(body),
                 else_branch,
             },
-            self.new_span(start, end),
+            Span::new(start, end),
         ))
     }
 
@@ -613,12 +721,12 @@ impl<'src> Parser<'src> {
             return None;
         }
         let end = self.prev_span_end();
-        Some((
+        Some(Spanned(
             Stmt::While {
                 condition,
                 body: Box::new(body),
             },
-            self.new_span(start, end),
+            Span::new(start, end),
         ))
     }
 
@@ -638,7 +746,7 @@ impl<'src> Parser<'src> {
             ));
             let span = self.span();
             self.bumpe()?;
-            return Some((Expr::Err, span));
+            return Some(Spanned(Expr::Err, span));
         }
         self.bumpe()?;
         let expr = self.parse_expr()?;
@@ -686,39 +794,43 @@ impl<'src> Parser<'src> {
         let end = self.span_end();
         self.bump();
 
-        Some((Block { inner: stmts }, self.new_span(start, end)))
+        Some(Spanned(Block { inner: stmts }, Span::new(start, end)))
     }
 
-    fn parse_vardecl(&mut self, typ: VarDeclType) -> Option<Spanned<Stmt>> {
+    fn parse_letdecl(&mut self) -> Option<Spanned<Stmt>> {
         let start = self.span_start();
-        if self.current() != Token::Let && self.current() != Token::Const {
-            panic!("Internal compiler error. Expected let/const, found something else");
+        if self.current() != Token::Let {
+            panic!("Internal compiler error. Expected let, found something else");
         } else {
             self.bumpe()?;
         }
 
-        let left = match self.parse_pat() {
-            Some(pat) => pat,
-            None => {
-                self.recover_stmt();
-                return None;
-            }
+        let mutable = if self.current() == Token::Mut {
+            self.bumpe()?;
+            true
+        } else {
+            false
+        };
+
+        let left = self.parse_pat()?;
+        let typ = if let Token::Colon = self.current() {
+            self.bumpe()?;
+            let typ = self.parse_type()?;
+            Some(typ)
+        } else {
+            None
         };
         match self.current() {
             Token::Semicolon => {
                 let end = self.prev_span_end();
-                return Some((
-                    match typ {
-                        VarDeclType::Let => Stmt::LetDecl {
-                            lhs: left,
-                            rhs: None,
-                        },
-                        VarDeclType::Const => Stmt::ConstDecl {
-                            lhs: left,
-                            rhs: None,
-                        },
+                return Some(Spanned(
+                    Stmt::LetDecl {
+                        lhs: left,
+                        mutable,
+                        typ: None,
+                        rhs: None,
                     },
-                    self.new_span(start, end),
+                    Span::new(start, end),
                 ));
             }
             Token::Eq => self.bumpe()?,
@@ -730,40 +842,27 @@ impl<'src> Parser<'src> {
                 self.bumpe()?;
                 // recover `let x y = 5;`
                 if self.current() != Token::Eq {
-                    // Failed. recover line and continue
-                    self.recover_stmt();
+                    // Failed. continue
                     return None;
                 }
             }
         }
-        let right = self.parse_expr();
-        let right = if let Some(expr) = right {
-            expr
-        } else {
-            self.recover_stmt();
-            return None;
-        };
+        let right = self.parse_expr()?;
         let end = self.prev_span_end();
-        self.bumpe()?;
-        Some((
-            match typ {
-                VarDeclType::Let => Stmt::LetDecl {
-                    lhs: left,
-                    rhs: Some(right),
-                },
-                VarDeclType::Const => Stmt::ConstDecl {
-                    lhs: left,
-                    rhs: Some(right),
-                },
+        Some(Spanned(
+            Stmt::LetDecl {
+                lhs: left,
+                mutable,
+                typ,
+                rhs: Some(right),
             },
-            self.new_span(start, end),
+            Span::new(start, end),
         ))
     }
 
     fn parse_pat(&mut self) -> Option<Spanned<Pattern>> {
         match self.current() {
-            Token::LCurly => self.parse_pat_object(),
-            Token::LSquare => self.parse_pat_array(),
+            Token::LParen => self.parse_pat_tuple(),
             Token::Identifier(_) => self.parse_pat_ident(),
             _ => {
                 self.error(ParsingError::new(
@@ -778,120 +877,6 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_pat_object(&mut self) -> Option<Spanned<Pattern>> {
-        let start = self.span_start();
-        if self.current() != Token::LCurly {
-            panic!(
-                "Internal compiler error. Expected object start {{ in pattern but found something else"
-            );
-        } else {
-            self.bumpe()?
-        };
-        let mut list = Vec::new();
-        loop {
-            match self.current() {
-                Token::RCurly => {
-                    self.bumpe()?;
-                    return Some((
-                        Pattern::Object(list),
-                        self.new_span(start, self.prev_span_end()),
-                    ));
-                }
-                Token::String(string) => {
-                    let expr = (
-                        Expr::Literal((Literal::String(string.clone()), self.span())),
-                        self.span(),
-                    );
-                    self.bumpe()?;
-                    if self.current() != Token::Colon {
-                        self.error(ParsingError::new(
-                            self.span(),
-                            PET::wrong_token(ET::Token(Token::Colon), self.current().clone()),
-                        ));
-                        return None;
-                    }
-                    self.bumpe()?;
-                    let pat = self.parse_pat()?;
-                    list.push((expr, Some(pat)));
-                    match self.current() {
-                        Token::RCurly | Token::Spread => {}
-                        Token::Comma => {
-                            self.bumpe()?;
-                        }
-                        other => {
-                            self.error(ParsingError::new(
-                                self.span(),
-                                PET::wrong_token(
-                                    ET::OneOfThree(Token::Comma, Token::Spread, Token::RCurly),
-                                    other.clone(),
-                                ),
-                            ));
-                            return None;
-                        }
-                    }
-                }
-                Token::Identifier(ident) => {
-                    let expr = (
-                        Expr::Identifier((Ident(ident.clone()), self.span())),
-                        self.span(),
-                    );
-                    self.bumpe()?;
-                    match self.current() {
-                        Token::Comma => {
-                            list.push((expr, None));
-                            self.bumpe()?;
-                            continue;
-                        }
-                        Token::RCurly => {
-                            list.push((expr, None));
-                            continue;
-                        }
-                        Token::Colon => {}
-                        _ => {
-                            self.error(ParsingError::new(
-                                self.span(),
-                                PET::wrong_token(
-                                    ET::OneOfThree(Token::Colon, Token::Comma, Token::RCurly),
-                                    self.current().clone(),
-                                ),
-                            ));
-                            return None;
-                        }
-                    }
-                    self.bumpe()?;
-                    let pat = self.parse_pat()?;
-                    list.push((expr, Some(pat)));
-                    match self.current() {
-                        Token::RCurly => {}
-                        Token::Comma => {
-                            self.bumpe()?;
-                        }
-                        other => {
-                            self.error(ParsingError::new(
-                                self.span(),
-                                PET::wrong_token(
-                                    ET::OneOfTwo(Token::Comma, Token::RCurly),
-                                    other.clone(),
-                                ),
-                            ));
-                            return None;
-                        }
-                    }
-                }
-                other => {
-                    self.error(ParsingError::new(
-                        self.span(),
-                        PET::wrong_token(
-                            ExpectedToken::TokenType(Cow::Borrowed("object pattern inner")),
-                            other.clone(),
-                        ),
-                    ));
-                    return None;
-                }
-            }
-        }
-    }
-
     fn parse_pat_ident(&mut self) -> Option<Spanned<Pattern>> {
         let ident = if let Token::Identifier(ident) = self.current() {
             Ident(ident.clone())
@@ -900,13 +885,13 @@ impl<'src> Parser<'src> {
         };
         let span = self.span();
         self.bumpe()?;
-        Some((Pattern::Ident((ident, span)), span))
+        Some(Spanned(Pattern::Ident(Spanned(ident, span)), span))
     }
 
-    fn parse_pat_array(&mut self) -> Option<Spanned<Pattern>> {
+    fn parse_pat_tuple(&mut self) -> Option<Spanned<Pattern>> {
         let start = self.span_start();
-        if self.current() != Token::LSquare {
-            panic!("Internal Compiler Error. Expected [ in pattern but found something else");
+        if self.current() != Token::LParen {
+            panic!("Internal Compiler Error. Expected ( in pattern but found something else");
         } else {
             self.bumpe()?;
         };
@@ -914,31 +899,16 @@ impl<'src> Parser<'src> {
 
         loop {
             match self.current() {
-                Token::RSquare => {
+                Token::RParen => {
                     self.bumpe()?;
-                    return Some((
-                        Pattern::Array(list, None),
-                        self.new_span(start, self.prev_span_end()),
+                    return Some(Spanned(
+                        Pattern::Tuple(list),
+                        Span::new(start, self.prev_span_end()),
                     ));
                 }
                 Token::Comma => {
                     list.push(None);
                     self.bumpe()?;
-                }
-                Token::Spread => {
-                    self.bumpe()?;
-                    let pat = self.parse_pat()?;
-                    if self.current() != Token::LSquare {
-                        self.error(ParsingError {
-                            span: self.span(),
-                            typ: ParsingErrorType::TokenAfterSpread,
-                        })
-                    }
-                    self.bumpe()?;
-                    return Some((
-                        Pattern::Array(list, Some((Box::new(pat.0), pat.1))),
-                        self.new_span(start, self.span_end()),
-                    ));
                 }
                 _ => {
                     let pat = self.parse_pat()?;
@@ -947,12 +917,12 @@ impl<'src> Parser<'src> {
                         Token::Comma => {
                             self.bumpe()?;
                         }
-                        Token::RSquare => {}
+                        Token::RParen => {}
                         _ => {
                             self.error(ParsingError::new(
                                 self.span(),
                                 PET::wrong_token(
-                                    ExpectedToken::OneOfTwo(Token::Comma, Token::RSquare),
+                                    ExpectedToken::OneOfTwo(Token::Comma, Token::RParen),
                                     self.current().clone(),
                                 ),
                             ));
@@ -966,22 +936,26 @@ impl<'src> Parser<'src> {
 
     fn parse_atom(&mut self) -> Option<Spanned<Expr>> {
         let expr = match self.current() {
-            Token::Identifier(ident) => Expr::Identifier((Ident(ident.clone()), self.span())),
-            Token::Null => Expr::Literal((Literal::Null, self.span())),
-            Token::HexLiteral(num) | Token::DecLiteral(num) => {
-                Expr::Literal((Literal::Integer(*num), self.span()))
+            Token::Identifier(ident) => {
+                Expr::Identifier(Spanned(Ident(ident.clone()), self.span()))
             }
-            Token::FloatLiteral(num) => Expr::Literal((Literal::Float(*num), self.span())),
-            Token::String(string) => Expr::Literal((Literal::String(string.clone()), self.span())),
+            Token::Null => Expr::Literal(Spanned(Literal::Null, self.span())),
+            Token::HexLiteral(num) | Token::DecLiteral(num) => {
+                Expr::Literal(Spanned(Literal::Integer(*num), self.span()))
+            }
+            Token::FloatLiteral(num) => Expr::Literal(Spanned(Literal::Float(*num), self.span())),
+            Token::String(string) => {
+                Expr::Literal(Spanned(Literal::String(string.clone()), self.span()))
+            }
             Token::TemplateString(template) => {
                 let mut templates = Vec::new();
 
                 let mut errors = Vec::new();
 
-                for (template, span) in template {
+                for Spanned(template, span) in template {
                     templates.push(match template {
                         lexer::TemplateStringFragment::String(string) => {
-                            (TemplateStringFragmentExpr::Literal(string.clone()), *span)
+                            Spanned(TemplateStringFragmentExpr::Literal(string.clone()), *span)
                         }
                         lexer::TemplateStringFragment::Placeholder(items) => {
                             let mut parser = Parser {
@@ -990,7 +964,7 @@ impl<'src> Parser<'src> {
                                 errors: Vec::new(),
                             };
 
-                            let expr = parser.parse_expr();
+                            let expr = parser.parse_expr_template(*span);
                             if !parser.is_empty() {
                                 errors.push(ParsingError::new(
                                     *span,
@@ -1003,12 +977,12 @@ impl<'src> Parser<'src> {
                             } else {
                                 continue;
                             };
-                            (TemplateStringFragmentExpr::Expr(expr.0), expr.1)
+                            Spanned(TemplateStringFragmentExpr::Expr(expr.0), expr.1)
                         }
                     })
                 }
                 self.errors.append(&mut errors);
-                Expr::Literal((Literal::Template(templates), self.span()))
+                Expr::Literal(Spanned(Literal::Template(templates), self.span()))
             }
             Token::LSquare => {
                 // array literal
@@ -1049,9 +1023,9 @@ impl<'src> Parser<'src> {
                     }
                 }
                 let end = self.prev_span_end();
-                return Some((
+                return Some(Spanned(
                     Expr::Parenthesized(Box::new(expr)),
-                    self.new_span(start, end),
+                    Span::new(start, end),
                 ));
             }
             _ => {
@@ -1065,19 +1039,46 @@ impl<'src> Parser<'src> {
                 return None;
             }
         };
-        self.bumpe()?;
-        Some((expr, self.prev_span()))
+        self.bump();
+        Some(Spanned(expr, self.prev_span()))
     }
 
     fn parse_expr(&mut self) -> Option<Spanned<Expr>> {
+        if self.is_empty() {
+            self.error(ParsingError::new(self.prev_span(), PET::EOF));
+            return None;
+        }
         self.parse_expr_bp(0)
+    }
+
+    fn parse_expr_template(&mut self, template_span: Span) -> Option<Spanned<Expr>> {
+        if self.is_empty() {
+            self.error(ParsingError::new(
+                template_span,
+                PET::EmptyTemplateStringPlaceholder,
+            ));
+            return None;
+        }
+        let expr = self.parse_expr_bp(0);
+        // Otherwise weird EOF errors occur
+        if expr.is_none() {
+            let err = self.errors.last().unwrap();
+            if let ParsingError {
+                span: _,
+                typ: ParsingErrorType::EOF,
+            } = err
+            {
+                self.errors.pop();
+            }
+        }
+        expr
     }
 }
 
 // Pratt parsing
 impl Parser<'_> {
     fn parse_expr_bp(&mut self, bp: u8) -> Option<Spanned<Expr>> {
-        let mut lhs = match prefix_bp(self.current()) {
+        let mut lhs = match prefix_bp(dbg!(self.current())) {
             Some(((), r_bp)) => {
                 let opspan = self.span();
                 let token = self.current().clone();
@@ -1087,6 +1088,13 @@ impl Parser<'_> {
             }
             None => self.parse_atom()?,
         };
+        if self.is_empty() {
+            self.error(ParsingError::new(
+                self.prev_span(),
+                PET::wrong_token(ExpectedToken::Token(Token::Semicolon), Token::EOF),
+            ));
+            return None;
+        }
         loop {
             if let Some((l_bp, ())) = postfix_bp(self.current()) {
                 if l_bp < bp {
@@ -1109,7 +1117,6 @@ impl Parser<'_> {
             }
             break;
         }
-
         Some(lhs)
     }
 }
@@ -1129,7 +1136,7 @@ fn prefix_bp(t: &Token) -> Option<((), u8)> {
 }
 
 fn apply_prefix_op(t: &Token, token_span: Span, expr: Spanned<Expr>) -> Spanned<Expr> {
-    let exprspan = (token_span.start..expr.1.end).into();
+    let exprspan = Span::new(token_span.start, expr.1.end);
     let prefix_op = match t {
         Token::PlusPlus => PrefixOp::PreInc,
         Token::MinusMinus => PrefixOp::PreDec,
@@ -1144,15 +1151,16 @@ fn apply_prefix_op(t: &Token, token_span: Span, expr: Spanned<Expr>) -> Spanned<
             t
         ),
     };
-    (
+    Spanned(
         Expr::UnaryPrefix {
-            op: (prefix_op, token_span),
+            op: Spanned(prefix_op, token_span),
             expr: Box::new(expr),
         },
         exprspan,
     )
 }
 
+// TODO handle As cast
 fn infix_bp(t: &Token) -> Option<(u8, u8)> {
     match t {
         Token::Asterisk | Token::Slash | Token::Percent => Some((155, 150)),
@@ -1161,7 +1169,7 @@ fn infix_bp(t: &Token) -> Option<(u8, u8)> {
         Token::Ampersand => Some((125, 120)),
         Token::Caret => Some((115, 110)),
         Token::Pipe => Some((105, 100)),
-        Token::Eqeq | Token::Neq | Token::LT | Token::GT | Token::LTE | Token::GTE => {
+        Token::Eqeq | Token::Neq | Token::LArrow | Token::RArrow | Token::LTE | Token::GTE => {
             Some((95, 90))
         }
         Token::DoubleAmpersand => Some((85, 84)),
@@ -1187,7 +1195,7 @@ fn apply_infix_op(
     lexpr: Spanned<Expr>,
     rexpr: Spanned<Expr>,
 ) -> Spanned<Expr> {
-    let exprspan = (lexpr.1.start..rexpr.1.end).into();
+    let exprspan = Span::new(lexpr.1.start, rexpr.1.end);
     let infix_op = match t {
         Token::Asterisk => InfixOp::Mul,
         Token::Slash => InfixOp::Div,
@@ -1202,8 +1210,8 @@ fn apply_infix_op(
         Token::Pipe => InfixOp::BitOr,
         Token::Eqeq => InfixOp::Eqeq,
         Token::Neq => InfixOp::NotEq,
-        Token::LT => InfixOp::LArrow,
-        Token::GT => InfixOp::RArrow,
+        Token::LArrow => InfixOp::LT,
+        Token::RArrow => InfixOp::GT,
         Token::LTE => InfixOp::LTE,
         Token::GTE => InfixOp::GTE,
         Token::DoubleAmpersand => InfixOp::And,
@@ -1222,11 +1230,11 @@ fn apply_infix_op(
         Token::ShrUnsignedEquals => InfixOp::ShrUnsignedAssign,
         _ => panic!("Internal compiler error. apply_infix_op called on non-infix op"),
     };
-    (
+    Spanned(
         Expr::Infix {
             left: Box::new(lexpr),
             right: Box::new(rexpr),
-            op: (infix_op, token_span),
+            op: Spanned(infix_op, token_span),
         },
         exprspan,
     )
@@ -1239,15 +1247,15 @@ fn postfix_bp(t: &Token) -> Option<(u8, ())> {
 }
 
 fn apply_postfix_op(t: &Token, token_span: Span, expr: Spanned<Expr>) -> Spanned<Expr> {
-    let exprspan = (token_span.start..expr.1.end).into();
+    let exprspan = Span::new(token_span.start, expr.1.end);
     let postfix_op = match t {
         Token::PlusPlus => PostfixOp::PostInc,
         Token::MinusMinus => PostfixOp::PostDec,
         _ => panic!("Internal compiler error. apply_postfix_op called on non-postfix op"),
     };
-    (
+    Spanned(
         Expr::UnaryPostfix {
-            op: (postfix_op, token_span),
+            op: Spanned(postfix_op, token_span),
             expr: Box::new(expr),
         },
         exprspan,
