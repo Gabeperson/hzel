@@ -1,8 +1,5 @@
+use crate::util_imports::*;
 use core::num::{ParseFloatError, ParseIntError};
-extern crate alloc;
-use alloc::borrow::ToOwned as _;
-use alloc::string::String;
-use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Span {
@@ -34,6 +31,8 @@ pub(crate) enum TemplateStringFragment {
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Token {
+    // TODO true & false
+    // TODO NaN & INFINITY, etc
     EOF,
     If,
     While,

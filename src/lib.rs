@@ -1,10 +1,17 @@
 #![no_std]
 // #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 // #![allow(clippy::missing_const_for_fn)]
+
+extern crate alloc;
+mod util_imports {
+    pub use alloc::{borrow::Cow, borrow::ToOwned, boxed::Box, string::String, vec::Vec};
+    pub use hashbrown::HashMap;
+}
 mod ast;
-mod bytecode;
 mod lexer;
+mod opcodes;
 mod parser;
+mod vm;
 
 // pub fn lex(s: &str) {
 //     let mut lexer = Lexer::new(s);

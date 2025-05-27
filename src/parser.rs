@@ -1,13 +1,8 @@
-extern crate alloc;
-use alloc::borrow::Cow;
-use alloc::borrow::ToOwned;
-use alloc::boxed::Box;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use super::ast::*;
 use super::lexer;
 use super::lexer::*;
+
+use crate::util_imports::*;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ParsingError {

@@ -1,8 +1,5 @@
 use crate::lexer::Spanned;
-extern crate alloc;
-use alloc::boxed::Box;
-use alloc::string::String;
-use alloc::vec::Vec;
+use crate::util_imports::*;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Expr {
@@ -54,6 +51,7 @@ pub(crate) enum Type {
     HashMap(Box<Spanned<Type>>, Box<Spanned<Type>>),
     I64,
     F64,
+    Bool,
     String,
     Class(Class),
     FnPtr(Spanned<Vec<Spanned<Type>>>, Option<Box<Spanned<Type>>>),
@@ -104,6 +102,7 @@ pub(crate) enum PostfixOp {
     PostDec,
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum InfixOp {
     Add,
