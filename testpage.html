@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Test Multi-File Upload API</title>
+  </head>
+  <body>
+    <h1>Register</h1>
+    <form id="registerForm">
+      <input
+        type="text"
+        name="username"
+        placeholder="Username"
+        required
+      /><br />
+      <input
+        type="password"
+        name="password"
+        placeholder="Password"
+        required
+      /><br />
+      <button type="submit">Register</button>
+    </form>
+    <hr />
+
+    <h1>Login</h1>
+    <form id="loginForm">
+      <input
+        type="text"
+        name="username"
+        placeholder="Username"
+        required
+      /><br />
+      <input
+        type="password"
+        name="password"
+        placeholder="Password"
+        required
+      /><br />
+      <button type="submit">Login</button>
+    </form>
+    <hr />
+
+    <h1>Upload Files/folders</h1>
+    <form id="uploadForm" enctype="multipart/form-data">
+      <input type="file" name="files" multiple required webkitdirectory /><br />
+      <button type="submit">Upload</button>
+    </form>
+
+    <pre id="output"></pre>
+
+    <script>
+      const output = document.getElementById("output");
+
+      async function postJSON(url, data) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+          credentials: "include",
+        });
+        output.textContent += `\n${url} → ${res.status}`;
+      }
+
+      document
+        .getElementById("registerForm")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const { username, password } = e.target;
+          await postJSON("/register", {
+            username: username.value,
+            password: password.value,
+          });
+        });
+
+      document
+        .getElementById("loginForm")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const { username, password } = e.target;
+          await postJSON("/login", {
+            username: username.value,
+            password: password.value,
+          });
+        });
+
+      async function sha256(file) {
+        const buf = await file.arrayBuffer();
+        const hashBuf = await crypto.subtle.digest("SHA-256", buf);
+        const hashArray = Array.from(new Uint8Array(hashBuf));
+        return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+      }
+
+      document
+        .getElementById("uploadForm")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const files = e.target.files.files;
+          if (!files.length) return;
+
+          const formData = new FormData();
+
+          for (const file of files) {
+            const hash = await sha256(file);
+            const metadata = {
+              hash,
+            };
+            const metadataBlob = new Blob([JSON.stringify(metadata)], {
+              type: "application/json",
+            });
+            formData.append("metadata", metadataBlob, file.name);
+            formData.append("file", file, file.webkitRelativePath || file.name);
+          }
+
+          const res = await fetch("/files", {
+            method: "POST",
+            body: formData,
+            credentials: "include",
+          });
+
+          output.textContent += `\n/upload → ${res.status}`;
+        });
+    </script>
+  </body>
+</html>
