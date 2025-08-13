@@ -49,6 +49,7 @@ impl App {
     pub async fn new(db_path: &str, files: String) -> Result<Self, Error> {
         let options = SqliteConnectOptions::new()
             .filename(db_path)
+            .foreign_keys(true)
             .create_if_missing(true);
         let db = SqlitePool::connect_with(options).await?;
         sqlx::migrate!().run(&db).await?;

@@ -37,15 +37,22 @@ pub struct Item {
     #[sqlx(rename = "type")]
     #[serde(rename = "type")]
     pub typ: String,
-    pub size: i64,
     pub created_at: i64,
     pub updated_at: i64,
-    pub hash: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UploadMetadata<'a> {
     hash: &'a str,
+}
+
+pub fn get_filepath(version_id: &str, files_dir: &str) -> String {
+    let folder1 = &version_id[..2];
+    let folder2 = &version_id[2..4];
+
+    let storage_path = format!("{folder1}/{folder2}/{version_id}");
+
+    format!("{files_dir}/{storage_path}")
 }
 
 #[debug_handler]
@@ -58,12 +65,15 @@ pub async fn upload(
 
     let AppState { db, files, .. } = state;
 
-    let transaction_id = query("INSERT INTO transaction_ids (committed) VALUES (0)")
+    let transaction_id = query("INSERT INTO transaction_ids (committed, username) VALUES (0, ?)")
+        .bind(&user.username)
         .execute(&db)
         .await
         .tap_err(|e| warn!("Error getting transaction ID: {e}"))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .last_insert_rowid();
+
+    let mut completed_files = 0;
 
     let block = async {
         loop {
@@ -82,6 +92,10 @@ pub async fn upload(
             let s = metadata.text().await.map_err(|e| e.status())?;
             let metadata: UploadMetadata =
                 serde_json::from_str(&s).map_err(|_e| StatusCode::BAD_REQUEST)?;
+
+            // TODO FIXME: quota + server side hashing impl
+            // TODO FIXME: Add symlink-esque versions
+            // TODO FIXME: test upload paths (duplicated)
 
             let hash = query(
                 r#"
@@ -143,12 +157,7 @@ pub async fn upload(
             let version_id = Uuid::new_v4();
             let id_string = version_id.to_string();
 
-            let folder1 = &id_string[..2];
-            let folder2 = &id_string[2..4];
-
-            let storage_path = format!("{folder1}/{folder2}/{id_string}");
-
-            let files = format!("{files}/{storage_path}");
+            let files = get_filepath(&id_string, &files);
 
             let path = Path::new(&files);
             let parent = path.parent().expect("We just formatted it");
@@ -176,14 +185,13 @@ pub async fn upload(
 
             let _res = query(
                 "INSERT INTO item_versions
-                (version_id, item_id, version_number, storage_path,
+                (version_id, item_id, version_number,
                 created_at, size, hash, transaction_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(id_string)
             .bind(item_id)
             .bind(new_version)
-            .bind(storage_path)
             .bind(now)
             .bind(size)
             .bind(metadata.hash)
@@ -192,12 +200,17 @@ pub async fn upload(
             .await
             .tap_err(|e| warn!("Failed to insert new item version into DB: {e}"))
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            completed_files += 1;
         }
     };
 
     let result = block.await;
 
     if let Err(e) = result {
+        warn!(
+            "Rolling back {completed_files} files for user {}",
+            user.username
+        );
         let mut q = query("SELECT storage_path FROM item_versions WHERE transaction_id = $1")
             .bind(transaction_id)
             .fetch(&db);

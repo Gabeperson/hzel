@@ -182,7 +182,7 @@ pub async fn login(
     };
 
     let token = auth_session.login(user).await;
-    let id: String = (&*auth_session.session_manager.id).to_owned();
+    let id: String = (*auth_session.session_manager.id).to_owned();
     let cookie = Cookie::build((id, token))
         .secure(auth_session.session_manager.secure)
         .http_only(true)

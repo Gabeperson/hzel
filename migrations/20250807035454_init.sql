@@ -20,16 +20,16 @@ CREATE TABLE IF NOT EXISTS item_versions (
     version_id TEXT PRIMARY KEY,  
     item_id TEXT NOT NULL REFERENCES items ON DELETE CASCADE,
     version_number INT NOT NULL,
-    storage_path TEXT NOT NULL,
     created_at INT NOT NULL,
     size INT NOT NULL,
     hash TEXT NOT NULL,
     transaction_id INTEGER NOT NULL REFERENCES transaction_ids ON DELETE CASCADE,
     UNIQUE (item_id, version_number)
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS transaction_ids (
     transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL REFERENCES users ON DELETE CASCADE,
     committed INT
 );
 
