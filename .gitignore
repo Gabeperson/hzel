@@ -2,3 +2,4 @@
 database-prod.db
 database-prod.db*
 files
+vendor

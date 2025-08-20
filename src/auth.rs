@@ -136,7 +136,7 @@ impl FromRequestParts<AppState> for Auth {
             };
             let creds = state.session_manager.store.get(cookie.value()).await;
             let Some(creds) = creds else { break 'blck None };
-            let user = Auth::get_user(&state.db, &creds.username)
+            let user = Auth::get_user(&state.db.db, &creds.username)
                 .await
                 .tap_err(|e| warn!("Error getting user from creds from db: {e}"))
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -148,7 +148,7 @@ impl FromRequestParts<AppState> for Auth {
         Ok(Self {
             user,
             session_token: session,
-            db: state.db.clone(),
+            db: state.db.db.clone(),
             session_manager: state.session_manager.clone(),
         })
     }

@@ -10,16 +10,15 @@ use axum::{
     routing::{get, post},
 };
 use axum_extra::extract::cookie::Key;
+use database::Database;
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use tower_http::cors::{AllowCredentials, AllowOrigin, CorsLayer};
 
 mod app;
 mod auth;
+mod database;
 
-use auth::{
-    Auth, login, logout, register,
-    session::{SessionManager, SessionStore},
-};
+use auth::{login, logout, register, session::SessionManager};
 
 pub struct App {
     db: SqlitePool,
@@ -28,14 +27,14 @@ pub struct App {
 
 #[derive(Clone, Debug)]
 pub struct AppState {
-    db: SqlitePool,
+    db: Database,
     files: String,
     session_manager: SessionManager,
 }
 
 impl FromRef<AppState> for SqlitePool {
     fn from_ref(input: &AppState) -> Self {
-        input.db.clone()
+        input.db.db.clone()
     }
 }
 
@@ -72,7 +71,7 @@ impl App {
             )));
 
         let app = router(AppState {
-            db: self.db,
+            db: Database { db: self.db },
             files: self.files,
             session_manager,
         })

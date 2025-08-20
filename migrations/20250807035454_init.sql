@@ -4,34 +4,54 @@ CREATE TABLE IF NOT EXISTS users (
     created_at INT NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS items (
-    id TEXT PRIMARY KEY,
-    owner_id TEXT NOT NULL REFERENCES users,
-    parent_id TEXT REFERENCES items ON DELETE CASCADE,
-    path TEXT NOT NULL,
-    type TEXT CHECK(type IN ('file', 'folder')) NOT NULL,
-    deleted INT NOT NULL DEFAULT 0,
-    created_at INT NOT NULL,
-    transaction_id INT NOT NULL REFERENCES transaction_ids ON DELETE CASCADE,
-    UNIQUE (owner_id, path)
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS item_versions (
-    version_id TEXT PRIMARY KEY,  
-    item_id TEXT NOT NULL REFERENCES items ON DELETE CASCADE,
-    version_number INT NOT NULL,
-    created_at INT NOT NULL,
-    size INT NOT NULL,
-    hash TEXT NOT NULL,
-    transaction_id INTEGER NOT NULL REFERENCES transaction_ids ON DELETE CASCADE,
-    UNIQUE (item_id, version_number)
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS transaction_ids (
     transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL REFERENCES users ON DELETE CASCADE,
     committed INT
-);
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS items (
+    id BLOB PRIMARY KEY,
+    owner_id TEXT NOT NULL REFERENCES users,
+    parent_id BLOB REFERENCES items ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    type TEXT CHECK(type IN ('file', 'folder')) NOT NULL,
+    deleted INT NOT NULL DEFAULT 0,
+    created_at INT NOT NULL,
+    transaction_id INT NOT NULL REFERENCES transaction_ids ON DELETE CASCADE
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS items_owner_path_undeleted ON items(owner_id, path) WHERE deleted = 0;
+
+CREATE TABLE IF NOT EXISTS item_versions (
+    version_id BLOB PRIMARY KEY,  
+    item_id BLOB not NULL REFERENCES items ON DELETE CASCADE,
+    version_number INT NOT NULL,
+    created_at INT NOT NULL,
+    size INT NOT NULL,
+    hash BLOB NOT NULL,
+    transaction_id INTEGER NOT NULL REFERENCES transaction_ids ON DELETE CASCADE,
+    UNIQUE (item_id, version_number)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS chunks (
+    hash BLOB PRIMARY KEY,
+    size INT NOT NULL,
+    refcount INT NOT NULL,
+    data BLOB NOT NULL,
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS version_chunks (
+    version_id BLOB REFERENCES item_versions ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    chunk_hash BLOB NOT NULL REFERENCES chunks,
+    offset INTEGER NOT NULL,
+    length INTEGER NOT NULL,
+    end INTEGER NOT NULL AS (offset+length-1),
+    transaction_id INTEGER NOT NULL REFERENCES transaction_ids ON DELETE CASCADE,
+    PRIMARY KEY (version_id, chunk_index)
+) STRICT;
+
 
 CREATE VIEW newest_item_versions AS
 SELECT iv.*
