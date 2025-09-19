@@ -4,17 +4,12 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use fastcdc::v2020::{Chunk, FastCDC};
-use futures_util::StreamExt;
-use jiff::Timestamp;
+use fastcdc::v2020::FastCDC;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Row, SqlitePool, query};
-use std::path::Path;
+use sqlx::prelude::FromRow;
 use tap::TapFallible;
-use tokio::{fs, io::AsyncWriteExt};
-use tracing::{error, warn};
+use tracing::warn;
 use typeshare::typeshare;
-use uuid::Uuid;
 
 use crate::{AppState, auth::Auth, database::NewVersion};
 
@@ -55,7 +50,7 @@ pub async fn upload(
 ) -> Result<impl IntoResponse, StatusCode> {
     let user = auth.user.ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let AppState { db, files, .. } = state;
+    let AppState { db, .. } = state;
 
     let transaction_id = db.get_transaction_id(&user.username).await?;
 
@@ -72,8 +67,9 @@ pub async fn upload(
                 return Ok(());
             };
             let s = metadata.text().await.map_err(|e| e.status())?;
-            let metadata: UploadMetadata =
-                serde_json::from_str(&s).map_err(|_e| StatusCode::BAD_REQUEST)?;
+            let metadata: UploadMetadata = serde_json::from_str(&s)
+                .tap_err(|e| warn!("Invalid Upload Metadata from client: {e}"))
+                .map_err(|_e| StatusCode::BAD_REQUEST)?;
 
             if metadata.size < 0 {
                 return Err(StatusCode::BAD_REQUEST);
@@ -106,6 +102,8 @@ pub async fn upload(
             };
             let new_ver_id = db.insert_new_version(new_version).await?;
 
+            // For future
+            #[allow(unused)]
             let mut curr_size = 0;
 
             // 1mb buffer
@@ -115,6 +113,7 @@ pub async fn upload(
             const AVG_CHUNK_SIZE: u32 = 128 * 1024;
             const MAX_CHUNK_SIZE: u32 = 256 * 1024;
             let mut chunks = Vec::new();
+            let mut offset = 0;
             let mut index = 0;
             loop {
                 match field.chunk().await.map_err(|e| e.status())? {
@@ -124,34 +123,69 @@ pub async fn upload(
                             FastCDC::new(&buf, MIN_CHUNK_SIZE, AVG_CHUNK_SIZE, MAX_CHUNK_SIZE);
                         chunks.extend(cdc.into_iter());
                         chunks.pop();
-                        if chunks.len() == 0 {
+                        if chunks.is_empty() {
                             continue;
                         }
+
+                        let last = chunks.last().expect("Checked it's not empty above");
+                        let consumed = last.offset + last.length;
 
                         for chunk in chunks.iter() {
                             let hash = db
                                 .create_chunk(&buf[chunk.offset..chunk.offset + chunk.length])
                                 .await?;
                             // Insert version_chunks connection
-                            todo!()
+                            db.insert_version_chunks(
+                                new_ver_id,
+                                index,
+                                hash,
+                                offset,
+                                chunk.length as i64,
+                                transaction_id,
+                            )
+                            .await
+                            .tap_err(|e| warn!("Error when inserting version chunks: {e}"))
+                            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                            index += 1;
+                            offset += chunk.length as i64;
+                            curr_size += chunk.length;
                         }
+                        buf.drain(..consumed);
                     }
                     None => {
                         let cdc =
                             FastCDC::new(&buf, MIN_CHUNK_SIZE, AVG_CHUNK_SIZE, MAX_CHUNK_SIZE);
                         chunks.extend(cdc.into_iter());
-                        if chunks.len() == 0 {
-                            // TODO: verify this is right
+                        if chunks.is_empty() {
+                            // We're done so break
                             break;
                         }
+
+                        let last = chunks.last().expect("Checked it's not empty above");
+                        let consumed = last.offset + last.length;
 
                         for chunk in chunks.iter() {
                             let hash = db
                                 .create_chunk(&buf[chunk.offset..chunk.offset + chunk.length])
                                 .await?;
-                            // Insert version_chunks connection
-                            todo!()
+
+                            db.insert_version_chunks(
+                                new_ver_id,
+                                index,
+                                hash,
+                                offset,
+                                chunk.length as i64,
+                                transaction_id,
+                            )
+                            .await
+                            .tap_err(|e| warn!("Error when inserting version chunks: {e}"))
+                            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+                            index += 1;
+                            offset += chunk.length as i64;
+                            curr_size += chunk.length;
                         }
+                        buf.drain(..consumed);
                     }
                 }
 
@@ -174,6 +208,8 @@ pub async fn upload(
         db.rollback_transaction(transaction_id).await?;
         return Err(e);
     }
+
+    db.commit_transaction(transaction_id).await?;
 
     Ok(StatusCode::OK)
 }

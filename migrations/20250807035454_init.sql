@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     hash BLOB PRIMARY KEY,
     size INT NOT NULL,
     refcount INT NOT NULL,
-    data BLOB NOT NULL,
+    data BLOB NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS version_chunks (

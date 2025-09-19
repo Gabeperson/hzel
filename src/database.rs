@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use axum::http::StatusCode;
+use axum::{body::Body, http::StatusCode};
+use http_range_header::{ParsedRanges, StartPosition, SyntacticallyCorrectRange};
 use jiff::Timestamp;
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
@@ -20,6 +21,61 @@ pub struct NewVersion {
 }
 
 impl Database {
+    pub async fn get_stream(
+        &self,
+        user: &str,
+        path: &Path,
+        ranges: Option<ParsedRanges>,
+    ) -> Result<Body, StatusCode> {
+        let pathstr = path.to_str().unwrap();
+        let size = self.get_size(user, pathstr).await?;
+        let last = (size - 1) as u64;
+        let ranges = ranges.unwrap_or_else(|| ParsedRanges {
+            ranges: vec![SyntacticallyCorrectRange {
+                start: StartPosition::Index(0),
+                end: http_range_header::EndPosition::LastByte,
+            }],
+        });
+        let ranges =ranges.ranges.iter().map(|r| {
+            let start = match r.start {
+                StartPosition::Index(n) => n,
+                StartPosition::FromLast(li) => last-li,
+            };
+        })
+        let start = match ranges.start {
+            StartPosition::Index(index) => index,
+            StartPosition::FromLast(rindex) => {}
+        };
+        if ranges.ranges.len() != 1 {}
+        todo!()
+    }
+    async fn get_size(&self, user: &str, path: &str) -> Result<i64, StatusCode> {
+        let size = {
+            let res = sqlx::query(
+                "
+                    SELECT i.id, iv.version_id, iv.size FROM items i
+                    JOIN newest_item_versions iv ON i.id = iv.item_id
+                    JOIN transaction_ids ti ON i.transaction_id = ti.transaction_id
+                    WHERE
+                        i.owner_id = ?1 AND
+                        i.path = ?2 AND
+                        i.deleted = 0 AND
+                        ti.committed = 1
+                ",
+            )
+            .bind(user)
+            .bind(pathstr)
+            .fetch_optional(&self.db)
+            .await
+            .tap_err(|e| warn!("Error getting stream: {e}"))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let Some(res) = res else {
+                return Err(StatusCode::NOT_FOUND);
+            };
+            res.get::<i64, _>("size")
+        };
+        Ok(size)
+    }
     pub async fn get_transaction_id(&self, user: &str) -> Result<i64, StatusCode> {
         let row = sqlx::query(
             "INSERT INTO transaction_ids (username, committed) VALUES (?, 0) RETURNING transaction_id",
@@ -49,6 +105,35 @@ impl Database {
             "SELECT version_number FROM item_versions WHERE item_id = ? ORDER BY version_number DESC LIMIT 1"
         ).bind(item_id).fetch_optional(&self.db).await.tap_err(|e| warn!("Error getting latest version for item: {e}")).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         Ok(row.map(|r| r.get("version_number")))
+    }
+    pub async fn insert_version_chunks(
+        &self,
+        version_id: Uuid,
+        index: i64,
+        chunk_hash: [u8; 32],
+        offset: i64,
+        length: i64,
+        transaction_id: i64,
+    ) -> Result<(), StatusCode> {
+        let version_id_bytes = version_id.as_bytes().to_vec();
+
+        sqlx::query(
+            "INSERT INTO version_chunks
+         (version_id, chunk_index, chunk_hash, offset, length, transaction_id)
+         VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&version_id_bytes)
+        .bind(index)
+        .bind(&chunk_hash as &[u8])
+        .bind(offset)
+        .bind(length)
+        .bind(transaction_id)
+        .execute(&self.db)
+        .await
+        .tap_err(|e| warn!("Error inserting version chunk: {e}"))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        Ok(())
     }
     pub async fn insert_new_version(&self, new_version: NewVersion) -> Result<Uuid, StatusCode> {
         let item_id = new_version.item_id.into_bytes();
@@ -157,7 +242,7 @@ impl Database {
 
         let row = sqlx::query(
             "INSERT INTO items (id, owner_id, parent_id, path, type, created_at, transaction_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(owner_id, path) DO UPDATE SET id = items.id RETURNING id",
+            VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET id = items.id RETURNING id",
         )
         .bind(id.as_bytes().to_vec())
         .bind(user)
@@ -181,6 +266,7 @@ impl Database {
         transaction_id: i64,
         path: &Path,
     ) -> Result<Option<Uuid>, StatusCode> {
+        // TODO FIXME handle ".."
         let Some(parent_path) = path.parent() else {
             return Ok(None);
         };

@@ -1,5 +1,4 @@
 use hzel::App;
-use tracing::level_filters::LevelFilter;
 
 #[tokio::main]
 async fn main() {
@@ -12,8 +11,6 @@ async fn async_main() {
         .with_line_number(true)
         // .with_max_level(LevelFilter::TRACE)
         .init();
-    let app = App::new("database_prod.db", String::from("files"))
-        .await
-        .unwrap();
+    let app = App::new("database_prod.db").await.unwrap();
     app.serve().await.unwrap()
 }

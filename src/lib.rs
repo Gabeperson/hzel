@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use anyhow::Error;
 use app::upload;
@@ -22,13 +22,11 @@ use auth::{login, logout, register, session::SessionManager};
 
 pub struct App {
     db: SqlitePool,
-    files: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct AppState {
     db: Database,
-    files: String,
     session_manager: SessionManager,
 }
 
@@ -45,14 +43,14 @@ impl FromRef<AppState> for Key {
 }
 
 impl App {
-    pub async fn new(db_path: &str, files: String) -> Result<Self, Error> {
+    pub async fn new(db_path: &str) -> Result<Self, Error> {
         let options = SqliteConnectOptions::new()
             .filename(db_path)
             .foreign_keys(true)
             .create_if_missing(true);
         let db = SqlitePool::connect_with(options).await?;
         sqlx::migrate!().run(&db).await?;
-        Ok(App { db, files })
+        Ok(App { db })
     }
     pub async fn serve(self) -> Result<(), Error> {
         //     // TODO FIXME make configurable
@@ -72,7 +70,6 @@ impl App {
 
         let app = router(AppState {
             db: Database { db: self.db },
-            files: self.files,
             session_manager,
         })
         .await

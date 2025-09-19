@@ -1,20 +1,17 @@
 use axum::{
     Json,
-    extract::{FromRequestParts, State},
+    extract::FromRequestParts,
     http::{StatusCode, request::Parts},
-    response::{IntoResponse, Redirect},
+    response::IntoResponse,
 };
-use axum_extra::extract::{
-    SignedCookieJar,
-    cookie::{Cookie, Expiration},
-};
+use axum_extra::extract::{SignedCookieJar, cookie::Cookie};
 use jiff::Timestamp;
 use serde::Deserialize;
-use session::{SessionManager, SessionStore};
-use sqlx::{SqlitePool, error::ErrorKind, prelude::FromRow, query, query_as};
+use session::SessionManager;
+use sqlx::{SqlitePool, prelude::FromRow, query, query_as};
 use tap::TapFallible as _;
-use time::{Duration, OffsetDateTime};
-use tracing::{error, warn};
+use time::Duration;
+use tracing::warn;
 
 use crate::AppState;
 

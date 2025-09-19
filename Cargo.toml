@@ -9,6 +9,7 @@ axum = { version = "0.8.4", features = ["http2", "macros", "multipart"] }
 axum-extra = { version = "0.10.1", features = ["cookie", "cookie-signed"] }
 fastcdc = "3.2.1"
 futures-util = "0.3.31"
+http-range-header = "0.4.2"
 jiff = "0.2.15"
 metrics = "0.24.2"
 metrics-exporter-prometheus = { version = "0.17.2", default-features = false }

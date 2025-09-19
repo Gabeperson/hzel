@@ -43,7 +43,7 @@
 
     <h1>Upload Files/folders</h1>
     <form id="uploadForm" enctype="multipart/form-data">
-      <input type="file" name="files" multiple required webkitdirectory /><br />
+      <input type="file" name="files" multiple required /><br />
       <button type="submit">Upload</button>
     </form>
 
@@ -84,13 +84,6 @@
           });
         });
 
-      async function sha256(file) {
-        const buf = await file.arrayBuffer();
-        const hashBuf = await crypto.subtle.digest("SHA-256", buf);
-        const hashArray = Array.from(new Uint8Array(hashBuf));
-        return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-      }
-
       document
         .getElementById("uploadForm")
         .addEventListener("submit", async (e) => {
@@ -101,15 +94,14 @@
           const formData = new FormData();
 
           for (const file of files) {
-            const hash = await sha256(file);
             const metadata = {
-              hash,
+              size: file.size,
             };
             const metadataBlob = new Blob([JSON.stringify(metadata)], {
               type: "application/json",
             });
             formData.append("metadata", metadataBlob, file.name);
-            formData.append("file", file, file.webkitRelativePath || file.name);
+            formData.append("file", file, file.name);
           }
 
           const res = await fetch("/files", {

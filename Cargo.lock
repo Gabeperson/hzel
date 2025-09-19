@@ -808,6 +808,7 @@ dependencies = [
  "axum-extra",
  "fastcdc",
  "futures-util",
+ "http-range-header",
  "jiff",
  "metrics",
  "metrics-exporter-prometheus",
